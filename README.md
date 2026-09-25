@@ -1,11 +1,18 @@
 # B站弹幕点歌机器人（网易云音乐）
 
+**当前版本：V.0.1.1** · [更新日志 CHANGELOG.md](CHANGELOG.md)
+
 观众在直播间发 **`点歌 歌名`**，机器人自动在网易云搜索、排队、用本机播放器放出来。
 不需要任何开发者凭证，用你自己的网易云账号扫码登录即可（VIP 账号能放会员歌曲）。
+
+还带一个 **OBS 歌词叠加层**：直播画面上同步显示当前歌词，逐句高亮、支持中英双语、
+字体和样式随便改（详见下面「歌词叠加层」一节）。
 
 ```
 B站弹幕  ──►  blivedm  ──►  解析指令  ──►  网易云搜索  ──►  点歌队列  ──►  本地播放器
              (WebSocket)                     (本地 API 服务)                (mpv/pygame)
+                                                    │
+                                                    └──►  歌词  ──►  OBS 叠加层
 ```
 
 ---
@@ -67,6 +74,7 @@ run.cmd --no-autoplay      关闭空闲随机播放（覆盖配置）
 - **最近日志**：和控制台一样的内容，直接滚动查看
 - **控制按钮**：切歌 / 暂停 / 继续 / **■ 停止播放** / 音量滑块 / 清空队列 / **空闲随机播放开关**
 - **点歌**：直接在面板上搜歌点歌，**不用发弹幕**（见下）
+- **歌词**：当前歌词带逐句高亮，以及 **OBS 叠加层地址 + 可视化样式设置**（见下）
 
 适合这两种情况：控制台窗口被直播软件挡住了，或者你干脆把它最小化了。
 页面每秒自动刷新，**只监听 `127.0.0.1`，外网访问不到**。
@@ -115,6 +123,114 @@ run.cmd --no-autoplay      关闭空闲随机播放（覆盖配置）
 按你直播间的调性改就行。
 
 关掉它：`run.cmd --no-web`；想留着面板但不自动开浏览器：`run.cmd --no-browser`。
+
+### 歌词叠加层（直播画面上显示歌词）
+
+点歌机器人会自动去网易云取当前这首歌的歌词，并且**逐句跟着播放进度高亮**，
+适合挂在 OBS 上给观众看。**支持中英双语**（网易云有翻译的话会自动对齐显示）。
+
+#### 在 OBS 里加进来
+
+1. 先双击 `run.cmd` 把机器人跑起来（歌词由机器人提供，它必须开着）
+2. OBS 里「来源」→ **+** → **浏览器**
+3. 地址填：
+
+   ```
+   http://127.0.0.1:8765/overlay
+   ```
+
+   面板上的「歌词叠加层」那一栏有现成地址，点「复制地址」就行。
+4. 宽高设成和画布一样（比如 1920×1080）
+5. **勾选「使用自定义帧速率」不是必须的，但请确认「自定义 CSS」留空**
+6. 这样就是全透明的了。想稳妥一点，在「自定义 CSS」里填一句：
+
+   ```css
+   body { background: transparent; }
+   ```
+
+7. 建议顺手勾上「**关闭源时关闭浏览器**」= 不勾（否则每次切场景都要重新载入）
+
+> 💡 叠加层页面**背景本身就是透明的**，OBS 里不需要做任何抠像或滤色。
+> 想在浏览器里先看看效果，直接打开 `http://127.0.0.1:8765/overlay` 即可
+> （浏览器里白底看不到透明，可以按 F12 把 body 背景临时改成深色来看）。
+
+#### 改字体和样式
+
+面板上「歌词叠加层」→ 展开「**歌词样式设置**」，改完点「保存歌词样式」，**叠加层会自动刷新，不用重开 OBS**：
+
+| 能改什么 | 说明 |
+|---|---|
+| 显示方式 | `滚动列表`（传统滚动）/ `只显示当前句和上下句`（更像卡拉OK）/ `只显示当前句` |
+| 字体 | 填字体名，如 `思源黑体`、`霞鹜文楷`、`Microsoft YaHei`。**留空 = 系统默认**。填多个用逗号分隔，前面的没有就往后找 |
+| 字号 / 行高 / 当前句放大 | 滑块调节 |
+| 三种颜色 | 普通文字 / 当前句 / 译文 |
+| 对齐、位置 | 左中右；靠上/居中/靠下 |
+| **自定义 CSS** | 追加在内置样式之后，**优先级最高**，可以彻底重写外观 |
+
+自定义 CSS 能选中的东西（F12 可以边调边看）：
+
+| 选择器 | 是什么 |
+|---|---|
+| `#stage` | 整个歌词区域（改内边距用） |
+| `#lines` | 歌词行容器（改行距、最大宽度用） |
+| `.ln` | 每一行歌词 |
+| `.ln.active` | **当前正在唱的那一句** |
+| `.ln.near` | 当前句附近的几句（专注模式才显示） |
+| `.ln .tr` | 译文那一行 |
+
+几个能直接抄的例子：
+
+```css
+/* 1. 当前句加发光，更像舞台灯 */
+.ln.active{ text-shadow:0 0 24px #7cc4ff, 0 0 6px #fff, 0 2px 10px #000; }
+
+/* 2. 整体往上挪一点，给底部字幕让位 */
+#stage{ padding-bottom:14vh; }
+
+/* 3. 只想要干净的白字，去掉所有装饰 */
+.ln{ font-weight:600; letter-spacing:.02em; }
+.ln.active{ font-weight:800; }
+
+/* 4. 把歌词放到画面左侧 */
+#stage{ justify-content:flex-start; }
+#lines{ text-align:left; max-width:60%; }
+
+/* 5. 无歌词时想显示点别的（可选） */
+body[data-status="nolyric"] #hint{ color:#ffd93d; }
+```
+
+> 页面 `<body>` 上有 `data-status` 属性，取值 `loading` / `playing` / `nolyric` / `idle` / `offline`，
+> 你可以按状态分别美化。同理 `data-mode` 是 `scroll`/`focus`/`single`，`data-anchor` 是位置。
+
+#### 临时调参（不动配置文件）
+
+叠加层地址支持网址参数，**只影响当前这个源**，很适合在 OBS 里快速试效果：
+
+```
+http://127.0.0.1:8765/overlay?font_size=64&color=%23ffe066&mode=focus&anchor=center
+```
+
+| 参数 | 等于面板里的 |
+|---|---|
+| `font_family` | 字体 |
+| `font_size` | 字号（纯数字，单位 px） |
+| `line_height` | 行高 |
+| `color` / `active_color` / `translation_color` | 三种颜色（`#` 要写成 `%23`） |
+| `active_scale` | 当前句放大倍数 |
+| `align` | `left` / `center` / `right` |
+| `anchor` | `top` / `center` / `bottom` |
+| `mode` | `scroll` / `focus` / `single` |
+
+调满意了，再把同样的值填进面板存下来，这样就是永久的。
+
+#### 说明
+
+- 歌词**只在你点歌/放歌时抓取**，抓到后按歌曲 id 缓存，同一首歌再放到不会重复请求
+- 抓取在**后台线程**里做，**不会拖慢起播**；还没抓到的时候叠加层显示「歌词加载中…」
+- 拿不到歌词（纯音乐、冷门歌、接口抽风）时叠加层显示「这首歌没有歌词」，**不影响放歌**
+- 不想要这个功能：面板里取消勾选「启用歌词」，或改 `config.json` 里 `lyric.enabled: false`。
+  关掉后机器人**完全不请求歌词接口**
+- **没有时间戳的歌词**（少数）也能显示，只是不能逐句高亮
 
 > 💡 **不小心关掉了浏览器标签页？** 面板是**机器人进程**提供的，关标签页**不会**停掉任何东西。
 > 重新打开 `http://127.0.0.1:8765/` 就行 —— 双击 **`open_panel.cmd`** 也能帮你打开。
@@ -357,9 +473,26 @@ start_bot.cmd --list-backends
     "keywords": ["轻音乐", "纯音乐", "华语流行", "钢琴曲", "民谣"],
     "avoid_repeat": 40,        // 避开最近放过的多少首
     "retry_delay_sec": 5       // 取不到歌时等多久再试
+  },
+  "lyric": {
+    "enabled": true,           // 总开关，关掉后完全不请求歌词接口
+    "mode": "scroll",          // 叠加层显示方式：scroll/focus/single
+    "font_family": "",         // 留空 = 系统默认；也可以填 "思源黑体, Microsoft YaHei"
+    "font_size": 44,           // 字号（px）
+    "line_height": 1.35,
+    "color": "#ffffff",        // 普通歌词
+    "active_color": "#7cc4ff", // 当前唱到的那一句
+    "translation_color": "#c9d4e6",  // 译文
+    "active_scale": 1.06,      // 当前句放大倍数
+    "align": "center",         // left/center/right
+    "anchor": "bottom",        // 歌词贴在画面 top/center/bottom
+    "css": ""                  // 自定义 CSS，优先级最高
   }
 }
 ```
+
+> 上面这些 `lyric` 项**在面板里都能可视化调**（「歌词样式设置」），
+> 调好点保存会写回这里。手动改 `config.json` 也一样生效，改完重启机器人即可。
 
 **音质建议**：VIP 用 `exhigh`（320k，省带宽）或 `lossless`（无损）。
 如果某首歌拿不到指定音质，程序会自动逐级降级重试，不会卡住。
@@ -378,6 +511,8 @@ start_bot.cmd --list-backends
 | `start_netease_api.cmd` | 只启动本地网易云 API 服务（**必须常开**） |
 | `start_bot.cmd` / `danmaku_bot.py` | 只启动机器人：收弹幕、点歌、播放 |
 | `webui.py` | 浏览器控制台（只监听 127.0.0.1，用 Python 标准库实现） |
+| `lyric_overlay.py` | OBS 歌词叠加层页面（透明背景、逐句高亮、自定义字体/CSS） |
+| `lyrics.py` | LRC 歌词解析：时间戳、双语对齐、按进度定位当前句 |
 | `open_panel.cmd` / `open_panel.py` | 重新打开浏览器控制台（关掉标签页后用这个） |
 | `check_env.cmd` / `check_env.py` | 环境自检 |
 | `get_mpv.cmd` / `get_mpv.py` | 下载 mpv 便携版 |
@@ -385,12 +520,17 @@ start_bot.cmd --list-backends
 | `roomcode.py` | 直播间号识别：网址 / 短链 / 分享文案 → 房间号 |
 | `player.py` | 播放后端（mpv/ffplay/pygame/wmp/null）+ 预下载 |
 | `song_queue.py` | 点歌队列（去重、限长） |
-| `common.py` | 配置读写、日志 |
+| `common.py` | 配置读写、日志、版本号 |
 | `config.json` | 配置文件 |
+| `CHANGELOG.md` | 更新日志（每个版本改了什么） |
 | `netease-api/serve.js` | API 服务的启动器 |
 | `tests/smoke_test.py` | 端到端冒烟测试（各模块） |
 | `tests/stdin_test.py` | 集成测试（模拟一整轮点歌） |
 | `tests/webui_test.py` | 网页面板测试（HTTP 接口 + 控制指令 + 面板点歌） |
+| `tests/lyrics_test.py` | 歌词解析测试（时间戳 / 双语对齐 / 边界，无需依赖） |
+| `tests/lyric_overlay_test.py` | 歌词叠加层测试（透明页 / 歌词接口 / 设置保存 / 非法输入拦截） |
+| `tests/lyric_bot_test.py` | 歌词抓取测试（异步抓取 / 缓存 / 换歌丢弃 / 失败降级） |
+| `tests/lyric_overlay_js.test.js` | 叠加层前端逻辑测试（Node 跑页面里那份真实 JS） |
 | `tests/live_connect_test.py` | 真实连接直播间，验证 WebSocket 握手 + 鉴权 + 心跳 |
 | `tests/diagnose_bilibili.py` | B站接口排查（连不上直播间时先跑这个） |
 | `tests/diagnose_danmaku.py` | 弹幕捕捉排查（收不到弹幕时跑这个） |
@@ -430,6 +570,28 @@ start_bot.cmd --list-backends
 
 把机器人以 `--stdin` 方式启动，然后真去打它的 HTTP 接口：首页、状态、日志、
 各控制指令、非法参数、404。
+
+### 歌词测试
+
+共 **154 项**，四个套件都不需要网易云 API 服务，也不需要装依赖（`requests` 之类会被自动打桩）：
+
+```bat
+.venv\Scripts\python.exe tests\lyrics_test.py
+.venv\Scripts\python.exe tests\lyric_overlay_test.py
+.venv\Scripts\python.exe tests\lyric_bot_test.py
+node tests\lyric_overlay_js.test.js
+```
+
+| 脚本 | 项数 | 测什么 |
+|---|---|---|
+| `lyrics_test.py` | 36 | LRC 解析：毫秒位数、`[offset:]` 偏移、一行多时间戳、双语对齐、重复行定位、无时间戳歌词、3000 行性能 |
+| `lyric_overlay_test.py` | 52 | 起一个真 HTTP 服务：叠加层页面透明性、`/api/overlay` 字段、设置保存进 `config.json`、非法输入（超大字号/非法颜色/注入串）被拦截、**不劫持页面滚动**、版本号 |
+| `lyric_bot_test.py` | 22 | 歌词抓取的异步链路：缓存命中、换歌丢弃过期结果、抓取失败降级、缓存上限 |
+| `lyric_overlay_js.test.js` | 44 | **直接跑叠加层页面里那份真实 JS**（假 DOM），验证逐句高亮下标、换歌重绘、自定义 CSS 注入与移除、网址参数覆盖、平移夹取 |
+
+> 最后一个需要 Node.js（开发用，普通使用不需要）。
+> 它特别有价值的地方在于：JS 是在页面里内联的，这个测试从 `lyric_overlay.py`
+> 里把脚本抠出来执行，**改了页面逻辑测试就会跟着失败**，不会出现"测试和实现各写一份"。
 
 ### 弹幕捕捉排查
 

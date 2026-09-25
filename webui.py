@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import socket
 import threading
 import time
@@ -19,7 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from common import recent_logs
+from common import DEFAULT_CONFIG, VERSION, load_config, recent_logs, save_config
+from lyric_overlay import PAGE as OVERLAY_PAGE
 from netease_api import Song
 
 LogFunc = Callable[[str], None]
@@ -41,6 +43,9 @@ PAGE = """<!DOCTYPE html>
   .wrap{max-width:1100px;margin:0 auto;padding:18px}
   header{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:16px}
   h1{font-size:17px;margin:0;font-weight:600}
+  /* 版本号：不能直接写进 PAGE，否则每次改版本都得动这一大段 HTML */
+  .ver{color:var(--dim);font-size:11px;font-weight:400;margin-left:6px;
+       border:1px solid var(--line);border-radius:999px;padding:1px 7px;vertical-align:middle}
   .pills{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
   .pill{background:var(--panel2);border:1px solid var(--line);border-radius:999px;
         padding:3px 11px;font-size:12px;color:var(--dim)}
@@ -109,12 +114,40 @@ PAGE = """<!DOCTYPE html>
   #logs .t{color:#5d6478;margin-right:7px}
   #logs .WARNING{color:var(--warn)} #logs .ERROR{color:var(--err)}
   .hint{color:var(--dim);font-size:12px;margin-top:10px}
+  .hint code{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
+             padding:1px 5px;font-size:11px;color:#a9b6cc}
+  /* 歌词区 */
+  .nowlyric{max-height:340px;overflow:auto;text-align:center;padding:6px 0}
+  .nowlyric .sl{font-size:15px;line-height:1.9;color:var(--dim);padding:1px 0;
+                transition:color .25s,font-size .25s}
+  .nowlyric .sl.on{color:var(--accent);font-size:17px;font-weight:600}
+  .nowlyric .sl .tr{display:block;font-size:12px;color:#7b8496}
+  .nowlyric .sl.on .tr{color:#9fc0ff}
+  /* 样式设置区 */
+  details.sty{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+  details.sty>summary{cursor:pointer;color:var(--dim);font-size:13px;user-select:none}
+  details.sty>summary:hover{color:var(--fg)}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}}
+  .f{display:flex;align-items:center;gap:9px;font-size:13px}
+  .f>span{color:var(--dim);min-width:96px;font-size:12px}
+  .f input[type=text],.f select{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line);
+    border-radius:7px;padding:6px 9px;color:var(--fg);font-size:13px;font-family:inherit}
+  .f input[type=text]:focus,.f select:focus{outline:none;border-color:var(--accent)}
+  .f input[type=color]{width:44px;height:28px;padding:0;border:1px solid var(--line);
+    border-radius:6px;background:var(--panel2);cursor:pointer}
+  .f input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+  .f input[type=range]{flex:1;min-width:0;width:auto}
+  #lyCss{width:100%;height:130px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;padding:10px;color:var(--fg);font:12px/1.6 ui-monospace,Consolas,monospace;
+    resize:vertical}
+  #lyCss:focus{outline:none;border-color:var(--accent)}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>B站弹幕点歌 · 控制台</h1>
+    <h1>B站弹幕点歌 · 控制台 <span class="ver">{{VERSION}}</span></h1>
     <div class="pills" id="pills"></div>
   </header>
 
@@ -154,6 +187,70 @@ PAGE = """<!DOCTYPE html>
     </div>
     <div id="results"><div class="empty">搜到结果后，点「点这首」加入队列</div></div>
     <div class="hint" id="reqHint"></div>
+  </div>
+
+  <div class="card">
+    <h2>歌词</h2>
+    <div class="nowlyric" id="lyricBox"><div class="empty">还没有在放歌</div></div>
+    <div class="hint" id="lyricHint"></div>
+  </div>
+
+  <div class="card">
+    <h2>歌词叠加层（OBS 浏览器源）</h2>
+    <div class="req">
+      <input id="ovUrl" type="text" readonly onclick="this.select()">
+      <button class="primary" onclick="copyOverlay()">复制地址</button>
+      <button onclick="window.open(document.getElementById('ovUrl').value,'_blank')">预览</button>
+    </div>
+    <div class="hint">
+      在 OBS 里添加「浏览器源」，把上面的地址粘进去，宽高设成画布大小，勾选「透明背景」，
+      自定义 CSS 填 <code>body{background:transparent}</code>。首次加载后建议勾掉「关闭源时关闭浏览器」。
+    </div>
+    <details class="sty">
+      <summary>歌词样式设置（改完点保存，叠加层会自动刷新）</summary>
+      <div class="grid">
+        <label class="f"><span>启用歌词</span><input type="checkbox" id="lyEnabled"></label>
+        <label class="f"><span>显示方式</span>
+          <select id="lyMode">
+            <option value="scroll">滚动列表</option>
+            <option value="focus">只显示当前句和上下句</option>
+            <option value="single">只显示当前句</option>
+          </select></label>
+        <label class="f"><span>字体</span>
+          <input type="text" id="lyFont" placeholder="留空=系统默认，例如 思源黑体, Microsoft YaHei"></label>
+        <label class="f"><span>字号 <b id="lySizeTxt">44</b>px</span>
+          <input type="range" id="lySize" min="12" max="160" step="1"></label>
+        <label class="f"><span>行高 <b id="lyLhTxt">1.35</b></span>
+          <input type="range" id="lyLh" min="0.9" max="3" step="0.05"></label>
+        <label class="f"><span>当前句放大 <b id="lyScaleTxt">1.06</b></span>
+          <input type="range" id="lyScale" min="1" max="2" step="0.01"></label>
+        <label class="f"><span>普通文字颜色</span><input type="color" id="lyColor"></label>
+        <label class="f"><span>当前句颜色</span><input type="color" id="lyActive"></label>
+        <label class="f"><span>译文颜色</span><input type="color" id="lyTr"></label>
+        <label class="f"><span>对齐</span>
+          <select id="lyAlign">
+            <option value="left">左对齐</option>
+            <option value="center">居中</option>
+            <option value="right">右对齐</option>
+          </select></label>
+        <label class="f"><span>位置</span>
+          <select id="lyAnchor">
+            <option value="bottom">靠下</option>
+            <option value="center">居中</option>
+            <option value="top">靠上</option>
+          </select></label>
+      </div>
+      <div class="hint" style="margin:10px 0 6px">
+        自定义 CSS（追加在内置样式之后，优先级最高。可写 <code>.ln.active{}</code>、<code>#lines{}</code> 等）
+      </div>
+      <textarea id="lyCss" spellcheck="false"
+        placeholder="/* 例如&#10;.ln.active{ text-shadow:0 0 18px #7cc4ff, 0 2px 10px #000; }&#10;#stage{ padding-bottom:12vh; } */"></textarea>
+      <div class="ctrls" style="margin-top:10px">
+        <button class="primary" onclick="saveLyric()">保存歌词样式</button>
+        <button onclick="resetLyric()">恢复默认</button>
+      </div>
+      <div class="hint" id="lySaveHint"></div>
+    </details>
   </div>
 
   <div class="cols">
@@ -339,13 +436,198 @@ async function refresh(){
   lg.innerHTML = s.logs.map(l =>
     `<div><span class="t">${esc(l.time)}</span><span class="${esc(l.level)}">${esc(l.msg)}</span></div>`).join('');
   if (atBottom) lg.scrollTop = lg.scrollHeight;
+
+  renderLyric(s);
 }
+
+// ---------------------------------------------------------------- 歌词
+
+let lyricSig = '';          // 歌词内容指纹，变了才重绘
+let lyricActive = -1;
+let lyricCfgLoaded = false;
+
+function renderLyric(s){
+  const box = document.getElementById('lyricBox');
+  const hint = document.getElementById('lyricHint');
+  const ly = s.lyric || {};
+
+  if (!ly.enabled){
+    box.innerHTML = '<div class="empty">歌词功能已关闭</div>';
+    hint.textContent = '在下面的「歌词样式设置」里可以重新打开';
+    return;
+  }
+  if (!s.now_playing){
+    box.innerHTML = '<div class="empty">还没有在放歌</div>';
+    hint.textContent = '';
+    lyricSig = ''; lyricActive = -1;
+    return;
+  }
+  if (ly.fetching){
+    box.innerHTML = '<div class="empty">歌词加载中…</div>';
+    hint.textContent = '';
+    return;
+  }
+  const lines = ly.lines || [];
+  if (!lines.length){
+    box.innerHTML = '<div class="empty">这首歌没有歌词</div>';
+    hint.textContent = ly.error ? ('取歌词失败：' + ly.error) : '';
+    lyricSig = ''; lyricActive = -1;
+    return;
+  }
+
+  hint.textContent = `${ly.count} 行` + (ly.has_translation ? ' · 双语' : '')
+    + (ly.synced ? ' · 已同步' : ' · 无时间戳');
+
+  // 歌词内容没变就不重建 DOM，免得每秒钟闪一下
+  const sig = ly.song_id + ':' + ly.count;
+  if (sig !== lyricSig){
+    lyricSig = sig;
+    lyricActive = -1;
+    box.innerHTML = lines.map(ln =>
+      `<div class="sl">${esc(ln.text)}` +
+      (ln.translation ? `<span class="tr">${esc(ln.translation)}</span>` : '') + '</div>').join('');
+    box.scrollTop = 0;
+  }
+
+  // 逐句高亮
+  const nodes = box.children;
+  let idx = -1;
+  if (ly.synced){
+    const el = s.now_elapsed || 0;
+    for (let i = 0; i < lines.length; i++){
+      if (lines[i].time !== null && lines[i].time <= el) idx = i; else break;
+    }
+  }
+  if (idx !== lyricActive){
+    for (let i = 0; i < nodes.length; i++) nodes[i].classList.toggle('on', i === idx);
+    lyricActive = idx;
+    scrollLyricBox(box, nodes[idx]);
+  }
+}
+
+/** 把当前句滚到歌词框中间。
+ *
+ * 这里只能动歌词框自己的 scrollTop，绝不能用 scrollIntoView ——
+ * 它会连整个页面一起滚，于是每唱一句页面就被拉回歌词卡片，
+ * 用户想看队列、日志、或者改样式都会被一直弹走。
+ */
+function scrollLyricBox(box, cur){
+  if (!box || !cur) return;
+  const target = cur.offsetTop - (box.clientHeight - cur.offsetHeight) / 2;
+  const max = Math.max(0, box.scrollHeight - box.clientHeight);
+  const top = Math.max(0, Math.min(max, target));
+  if (box.scrollTo) box.scrollTo({top, behavior:'smooth'});
+  else box.scrollTop = top;
+}
+
+function setLySaveHint(t){ document.getElementById('lySaveHint').textContent = t || ''; }
+
+function overlayUrl(){
+  return location.origin + '/overlay';
+}
+
+function copyOverlay(){
+  const input = document.getElementById('ovUrl');
+  input.select();
+  const done = () => setLySaveHint('地址已复制，去 OBS 添加浏览器源吧');
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(input.value).then(done, () => { document.execCommand('copy'); done(); });
+  } else {
+    document.execCommand('copy'); done();
+  }
+}
+
+function fillLyricForm(cfg){
+  lyCfg = cfg || {};
+  document.getElementById('lyEnabled').checked = cfg.enabled !== false;
+  document.getElementById('lyMode').value = cfg.mode || 'scroll';
+  document.getElementById('lyFont').value = cfg.font_family || '';
+  const size = Number(cfg.font_size || 44);
+  document.getElementById('lySize').value = size;
+  document.getElementById('lySizeTxt').textContent = size;
+  const lh = Number(cfg.line_height || 1.35);
+  document.getElementById('lyLh').value = lh;
+  document.getElementById('lyLhTxt').textContent = lh;
+  const sc = Number(cfg.active_scale || 1.06);
+  document.getElementById('lyScale').value = sc;
+  document.getElementById('lyScaleTxt').textContent = sc;
+  document.getElementById('lyColor').value = cfg.color || '#ffffff';
+  document.getElementById('lyActive').value = cfg.active_color || '#7cc4ff';
+  document.getElementById('lyTr').value = cfg.translation_color || '#c9d4e6';
+  document.getElementById('lyAlign').value = cfg.align || 'center';
+  document.getElementById('lyAnchor').value = cfg.anchor || 'bottom';
+  document.getElementById('lyCss').value = cfg.css || '';
+}
+
+let lyCfg = {};
+
+function collectLyricForm(){
+  return {
+    enabled: document.getElementById('lyEnabled').checked,
+    mode: document.getElementById('lyMode').value,
+    font_family: document.getElementById('lyFont').value.trim(),
+    font_size: Number(document.getElementById('lySize').value),
+    line_height: Number(document.getElementById('lyLh').value),
+    active_scale: Number(document.getElementById('lyScale').value),
+    color: document.getElementById('lyColor').value,
+    active_color: document.getElementById('lyActive').value,
+    translation_color: document.getElementById('lyTr').value,
+    align: document.getElementById('lyAlign').value,
+    anchor: document.getElementById('lyAnchor').value,
+    css: document.getElementById('lyCss').value,
+  };
+}
+
+async function saveLyric(){
+  setLySaveHint('保存中…');
+  try {
+    const r = await (await fetch('/api/settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(collectLyricForm())
+    })).json();
+    setLySaveHint(r.message || (r.ok ? '已保存' : '保存失败'));
+    if (r.setting) fillLyricForm(r.setting);
+  } catch(e){ setLySaveHint('保存失败：' + e); }
+}
+
+async function resetLyric(){
+  if (!confirm('恢复成默认歌词样式？')) return;
+  setLySaveHint('正在恢复…');
+  try {
+    const r = await (await fetch('/api/settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({enabled:true, mode:'scroll', font_family:'', font_size:44,
+        line_height:1.35, active_scale:1.06, color:'#ffffff', active_color:'#7cc4ff',
+        translation_color:'#c9d4e6', align:'center', anchor:'bottom', css:''})
+    })).json();
+    setLySaveHint(r.message || '已恢复默认');
+    if (r.setting) fillLyricForm(r.setting);
+  } catch(e){ setLySaveHint('恢复失败：' + e); }
+}
+
+// 滑块旁边的实时数字
+[['lySize','lySizeTxt'],['lyLh','lyLhTxt'],['lyScale','lyScaleTxt']].forEach(([id, out]) => {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => {
+    document.getElementById(out).textContent = el.value;
+  });
+});
+
+document.getElementById('ovUrl').value = overlayUrl();
 
 const volEl = document.getElementById('vol');
 volEl.addEventListener('mousedown', () => dragging = true);
 volEl.addEventListener('touchstart', () => dragging = true);
 window.addEventListener('mouseup', () => dragging = false);
 window.addEventListener('touchend', () => dragging = false);
+
+// 首次拿一次歌词设置填进表单；之后不停覆盖会打断正在编辑的内容
+fetch('/api/status').then(r => r.json()).then(s => {
+  if (!lyricCfgLoaded){
+    lyricCfgLoaded = true;
+    fillLyricForm((s && s.lyric_settings) || {});
+  }
+}).catch(() => {});
 
 refresh();
 setInterval(refresh, 1000);
@@ -406,6 +688,84 @@ def _song_to_json(song: Song) -> dict[str, Any]:
     }
 
 
+# 颜色只允许十六进制或 rgb/hsl 函数写法，避免有人往 config.json 里塞奇怪的东西
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$|^(?:rgb|rgba|hsl|hsla)\([0-9.,%\s/]+\)$|^[a-zA-Z]{3,20}$")
+_FONT_RE = re.compile(r"^[\w\s,\-'\"\u4e00-\u9fff]+$")
+_ALIGN_VALUES = {"left", "center", "right"}
+_ANCHOR_VALUES = {"top", "center", "bottom"}
+_MODE_VALUES = {"scroll", "focus", "single"}
+# 自定义 CSS 的长度上限，防止一不小心贴进来几兆
+_CSS_MAX = 20000
+
+
+def _opt_color(value: Any, fallback: str) -> str:
+    text = str(value or "").strip()
+    return text if text and _COLOR_RE.match(text) else fallback
+
+
+def _opt_font(value: Any, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text if len(text) <= 200 and _FONT_RE.match(text) else fallback
+
+
+def _opt_number(value: Any, fallback: float, low: float, high: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if number != number:  # NaN
+        return fallback
+    return max(low, min(high, number))
+
+
+def _opt_choice(value: Any, allowed: set[str], fallback: str) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in allowed else fallback
+
+
+def sanitize_lyric_settings(payload: dict[str, Any], base: dict[str, Any] | None = None) -> dict[str, Any]:
+    """把面板/接口传来的歌词设置洗一遍，返回可以安全写进 config.json 的值。
+
+    只认白名单字段；越界或格式不对的值一律退回默认，绝不原样写盘。
+    """
+    defaults = DEFAULT_CONFIG["lyric"]
+    merged: dict[str, Any] = dict(defaults)
+    if base:
+        merged.update(base)
+
+    if "enabled" in payload:
+        merged["enabled"] = bool(payload.get("enabled"))
+    if "font_family" in payload:
+        merged["font_family"] = _opt_font(payload.get("font_family"), str(defaults["font_family"]))
+    if "font_size" in payload:
+        merged["font_size"] = round(_opt_number(payload.get("font_size"), defaults["font_size"], 12, 300))
+    if "line_height" in payload:
+        merged["line_height"] = round(_opt_number(payload.get("line_height"), defaults["line_height"], 0.8, 4), 2)
+    if "color" in payload:
+        merged["color"] = _opt_color(payload.get("color"), str(defaults["color"]))
+    if "active_color" in payload:
+        merged["active_color"] = _opt_color(payload.get("active_color"), str(defaults["active_color"]))
+    if "translation_color" in payload:
+        merged["translation_color"] = _opt_color(
+            payload.get("translation_color"), str(defaults["translation_color"])
+        )
+    if "active_scale" in payload:
+        merged["active_scale"] = round(_opt_number(payload.get("active_scale"), defaults["active_scale"], 1.0, 2.5), 2)
+    if "align" in payload:
+        merged["align"] = _opt_choice(payload.get("align"), _ALIGN_VALUES, str(defaults["align"]))
+    if "anchor" in payload:
+        merged["anchor"] = _opt_choice(payload.get("anchor"), _ANCHOR_VALUES, str(defaults["anchor"]))
+    if "mode" in payload:
+        merged["mode"] = _opt_choice(payload.get("mode"), _MODE_VALUES, "scroll")
+    if "css" in payload:
+        css = str(payload.get("css") or "")
+        merged["css"] = css[:_CSS_MAX]
+    # 只保留默认配置里定义过的键，别的一律丢掉
+    return {key: merged[key] for key in defaults if key in merged}
+
+
 class _PanelServer(ThreadingHTTPServer):
     """本地面板用的 HTTP 服务。
 
@@ -428,6 +788,8 @@ class ControlPanel:
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
         self.url = ""
+        # 改 config.json 时串行化，避免两个请求同时写坏文件
+        self._config_lock = threading.RLock()
 
     # ------------------------------------------------------------------ 启动
 
@@ -482,7 +844,50 @@ class ControlPanel:
     def status(self) -> dict[str, Any]:
         snapshot = self.bot.status_snapshot()
         snapshot["logs"] = recent_logs(120)
+        # 面板上的歌词样式表单要用它初始化
+        snapshot["lyric_settings"] = self.lyric_settings()
+        snapshot["version"] = VERSION
         return snapshot
+
+    # ------------------------------------------------------------ 歌词与叠加层
+
+    def lyric_settings(self) -> dict[str, Any]:
+        """当前生效的歌词设置（洗过的）。"""
+        raw = (getattr(self.bot, "config", None) or {}).get("lyric") or {}
+        return sanitize_lyric_settings({}, raw)
+
+    def overlay_payload(self) -> dict[str, Any]:
+        """叠加层要的全部数据，一次请求给全，避免每秒打多个接口。"""
+        snapshot = self.bot.status_snapshot()
+        return {
+            "playing": snapshot.get("now_playing") is not None,
+            "elapsed": snapshot.get("now_elapsed") or 0.0,
+            "now_playing": snapshot.get("now_playing"),
+            "lyric": snapshot.get("lyric") or {},
+            "config": self.lyric_settings(),
+            "version": VERSION,
+        }
+
+    def save_lyric_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """把歌词设置写回 config.json，并让机器人立刻生效（不用重启）。"""
+        with self._config_lock:
+            current = load_config()
+            merged = sanitize_lyric_settings(payload, current.get("lyric"))
+            current["lyric"] = merged
+            try:
+                save_config(current)
+            except OSError as exc:
+                return {"ok": False, "message": f"写入 config.json 失败：{exc}"}
+
+        bot = self.bot
+        # 让运行中的机器人用上新设置
+        if hasattr(bot, "config"):
+            with contextlib.suppress(Exception):
+                bot.config["lyric"] = merged
+        if hasattr(bot, "lyric_enabled"):
+            with contextlib.suppress(Exception):
+                bot.lyric_enabled = bool(merged.get("enabled", True))
+        return {"ok": True, "message": "歌词样式已保存并生效", "setting": merged}
 
     def do_action(self, action: str, value: Any) -> dict[str, Any]:
         """执行面板上的一次操作，返回给前端的结果。"""
@@ -581,12 +986,23 @@ def _make_handler(panel: ControlPanel):
         def do_GET(self) -> None:  # noqa: N802 - 标准库要求的名字
             path = urlparse(self.path).path
             if path in ("/", "/index.html"):
-                self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                # 版本号在这里替换：PAGE 里 CSS/JS 花括号太多，不能用 f-string
+                self._send(200, PAGE.replace("{{VERSION}}", VERSION).encode("utf-8"),
+                           "text/html; charset=utf-8")
+            elif path == "/overlay":
+                # OBS 浏览器源用的透明歌词页
+                self._send(200, OVERLAY_PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif path == "/api/status":
                 try:
                     self._json(panel.status())
                 except Exception as exc:  # noqa: BLE001
                     self._json({"error": str(exc)}, 500)
+            elif path == "/api/overlay":
+                # 叠加层轮询这个接口，出错也只回一个 error 字段，让页面自己显示
+                try:
+                    self._json(panel.overlay_payload())
+                except Exception as exc:  # noqa: BLE001
+                    self._json({"error": f"状态读取失败：{exc}"}, 500)
             elif path == "/api/logs":
                 self._json(recent_logs(200))
             elif path == "/favicon.ico":
@@ -596,7 +1012,7 @@ def _make_handler(panel: ControlPanel):
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
-            if path != "/api/command":
+            if path not in ("/api/command", "/api/settings"):
                 self._json({"error": "not found"}, 404)
                 return
             try:
@@ -605,6 +1021,16 @@ def _make_handler(panel: ControlPanel):
                 payload = json.loads(raw.decode("utf-8") or "{}")
             except (ValueError, UnicodeDecodeError):
                 self._json({"ok": False, "message": "请求体不是合法 JSON"}, 400)
+                return
+
+            if path == "/api/settings":
+                try:
+                    result = panel.save_lyric_settings(payload if isinstance(payload, dict) else {})
+                except Exception as exc:  # noqa: BLE001
+                    self._json({"ok": False, "message": f"保存失败：{exc}"}, 500)
+                    return
+                self._json(result)
+                panel.log(f"歌词样式已更新（{'成功' if result.get('ok') else '失败'}）")
                 return
 
             action = str(payload.get("action", ""))

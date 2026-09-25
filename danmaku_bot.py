@@ -32,7 +32,8 @@ import aiohttp
 import blivedm
 import requests
 
-from common import load_config, save_config, setup_logging
+from common import VERSION, load_config, save_config, setup_logging
+from lyrics import Lyrics, parse_lyrics
 from netease_api import QUALITY_LEVELS, NeteaseClient, NeteaseError, Song
 from player import AudioPlayer, AudioPrefetcher
 from roomcode import describe_input_help, parse_room_code
@@ -300,6 +301,19 @@ class SongBot:
 
         self.panel: ControlPanel | None = None
 
+        # 歌词：跟着当前播放的歌走，抓取放在后台线程，不拖慢播放
+        lyric_conf = config.get("lyric") or {}
+        self.lyric_enabled = bool(lyric_conf.get("enabled", True))
+        self._lyric_lock = threading.Lock()
+        self._lyric_cache: dict[int, tuple[str, str]] = {}
+        self._lyric_lru: deque[int] = deque(maxlen=80)
+        self._lyric_gen = 0
+        self._lyric_current_id = 0
+        self._lyric_current: Lyrics | None = None
+        self._lyric_fetching = False
+        self._lyric_error = ""
+        self._lyric_have = False
+
         self.replier = BiliDanmakuSender(
             sessdata=config["bilibili"].get("sessdata", ""),
             bili_jct=config["bilibili"].get("bili_jct", ""),
@@ -361,8 +375,103 @@ class SongBot:
                 "keywords": list(self.autoplay_keywords),
             },
             "danmaku": list(self.recent_danmaku),
+            "lyric": self.lyric_state(),
             "logs": [],
         }
+
+    # -------------------------------------------------------------- 歌词
+
+    def lyric_state(self) -> dict[str, Any]:
+        """当前这首歌的歌词状态，给网页面板和 OBS 叠加层用。"""
+        with self._lyric_lock:
+            current_id = self._lyric_current_id
+            lyrics = self._lyric_current
+            fetching = self._lyric_fetching
+            error = self._lyric_error
+            have = self._lyric_have
+
+        lines = lyrics.lines if lyrics is not None else []
+        return {
+            "enabled": self.lyric_enabled,
+            "song_id": current_id,
+            "lines": [ln.to_json() for ln in lines],
+            "synced": bool(lyrics.synced) if lyrics is not None else False,
+            "has_translation": bool(lyrics.has_translation) if lyrics is not None else False,
+            "count": len(lines),
+            "fetching": fetching,
+            "have": have,
+            "error": error,
+        }
+
+    def _start_lyric_fetch(self, song: Song) -> None:
+        """为这首歌抓歌词（后台线程，不阻塞播放）。"""
+        if not self.lyric_enabled:
+            return
+
+        with self._lyric_lock:
+            self._lyric_current_id = song.id
+            self._lyric_current = None
+            self._lyric_have = False
+            self._lyric_error = ""
+            self._lyric_gen += 1
+            generation = self._lyric_gen
+
+            cached = self._lyric_cache.get(song.id)
+            if cached is not None:
+                self._lyric_current = parse_lyrics(cached[0], cached[1])
+                self._lyric_have = bool(self._lyric_current)
+                self._lyric_fetching = False
+                return
+
+            self._lyric_fetching = True
+
+        threading.Thread(
+            target=self._fetch_lyric_worker,
+            args=(song, generation),
+            name=f"lyric-{song.id}",
+            daemon=True,
+        ).start()
+
+    def _fetch_lyric_worker(self, song: Song, generation: int) -> None:
+        """后台抓歌词。抓完时如果已经换歌了就丢弃结果。"""
+        lrc = tlyric = ""
+        error = ""
+        try:
+            lrc, tlyric = self.play_client.lyric_full(song.id)
+        except Exception as exc:  # noqa: BLE001 - 歌词拿不到不该影响播放
+            error = str(exc)
+
+        parsed = parse_lyrics(lrc, tlyric)
+
+        with self._lyric_lock:
+            # 抓取期间已经切歌了，这份结果已经过期，直接丢掉
+            if generation != self._lyric_gen:
+                return
+            self._lyric_fetching = False
+            if error:
+                self._lyric_error = error
+                self.log.debug("取歌词失败（%s）：%s", song.name, error)
+                return
+            if not parsed:
+                self._lyric_error = ""
+                self._lyric_have = False
+                self.log.info("《%s》没有歌词", song.name)
+                return
+
+            self._lyric_cache[song.id] = (lrc, tlyric)
+            self._lyric_lru.append(song.id)
+            # 超出缓存上限就丢掉最旧的
+            while len(self._lyric_cache) > 80 and self._lyric_lru:
+                stale = self._lyric_lru.popleft()
+                self._lyric_cache.pop(stale, None)
+
+            self._lyric_current = parsed
+            self._lyric_error = ""
+            self._lyric_have = True
+
+        kind = "双语" if parsed.has_translation else "单语"
+        sync = "可逐句同步" if parsed.synced else "无时间戳（只能整段显示）"
+        self.log.info("歌词：%s %d 行（%s，%s）", song.name, len(parsed), kind, sync)
 
     def note_danmaku(self, uname: str, text: str, matched: bool) -> None:
         """记录一条收到的弹幕（不管是不是点歌指令）。
@@ -761,6 +870,9 @@ class SongBot:
 
         self.current_started_at = time.time()
         self.paused = False
+        # 歌词异步抓，不挡播放；抓到之前叠加层会显示"加载中"
+        with contextlib.suppress(Exception):
+            self._start_lyric_fetch(song)
         try:
             finished = self.player.play(url, duration_hint=song.duration_ms / 1000, cached_path=cached)
         finally:
@@ -1297,6 +1409,7 @@ def main() -> int:
             return 1
 
     bot = SongBot(config)
+    log.info("B站弹幕点歌机器人 %s", VERSION)
     if args.verbose:
         bot.log_all_danmaku = True
         log.info("已开启 --verbose：收到的每一条弹幕都会打印出来（不点歌也能看到）")

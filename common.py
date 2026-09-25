@@ -14,6 +14,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 
+# 项目版本号。改这个值时请同步更新 CHANGELOG.md，并给仓库打上对应的 tag
+# （V.0.1.1 对应 tag v0.1.1）。
+VERSION = "V.0.1.1"
+VERSION_TAG = "v0.1.1"
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "bilibili": {
         "room_id": 0,
@@ -48,6 +53,28 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 8765,
         "open_browser": True,
+    },
+    "lyric": {
+        # 总开关：关掉后不再请求歌词接口，叠加层会显示"歌词未开启"
+        "enabled": True,
+        # 叠加层默认字体。留空则用系统默认字体栈
+        "font_family": "",
+        # 字号 / 行高 / 颜色，都是叠加层的默认值，面板里能改
+        "font_size": 44,
+        "line_height": 1.35,
+        "color": "#ffffff",
+        "active_color": "#7cc4ff",
+        "translation_color": "#c9d4e6",
+        # 逐句高亮的缩放倍数（当前句放大一点，更像卡拉OK）
+        "active_scale": 1.06,
+        # 叠加层显示方式：scroll 滚动列表 / focus 只显示当前句和邻居 / single 只有当前句
+        "mode": "scroll",
+        # 叠加层文字对齐：left / center / right
+        "align": "center",
+        # 竖屏时歌词显示在画面的什么位置：top / center / bottom
+        "anchor": "bottom",
+        # 用户自定义 CSS，追加在内置样式之后，优先级最高
+        "css": "",
     },
     "autoplay": {
         "enabled": False,

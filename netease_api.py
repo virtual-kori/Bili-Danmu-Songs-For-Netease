@@ -7,6 +7,7 @@
     search()        搜索单曲
     song_url()      取播放地址（VIP Cookie 下可拿到无损/高码率完整歌曲）
     lyric()         取歌词
+    lyric_full()    取歌词原文 + 翻译
     song_detail()   取歌曲详情
     qr_*()          扫码登录
 """
@@ -294,9 +295,19 @@ class NeteaseClient:
 
     def lyric(self, song_id: int) -> str:
         """取 LRC 歌词文本，没有则返回空串。"""
+        lrc, _ = self.lyric_full(song_id)
+        return lrc
+
+    def lyric_full(self, song_id: int) -> tuple[str, str]:
+        """取 LRC 原文和翻译歌词，返回 (原文, 译文)。
+
+        接口在返回里同时给了 `lrc`（原文）和 `tlyric`（翻译）。没有翻译时
+        `tlyric` 是空串或只有一个空的时间戳，交给 lyrics.py 解析时会被忽略。
+        """
         data = self._get("/lyric", {"id": song_id})
         lrc = (data.get("lrc") or {}).get("lyric") or ""
-        return str(lrc)
+        tlyric = (data.get("tlyric") or {}).get("lyric") or ""
+        return str(lrc), str(tlyric)
 
     # --------------------------------------------------------------- 登录相关
 
