@@ -3,7 +3,55 @@
 本项目的所有重要变更都会记在这里。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
-版本号形如 `V.0.1.1`，对应的 git tag 是 `v0.1.1`。
+版本号形如 `V.0.1.2`，对应的 git tag 是 `v0.1.2`。
+
+---
+
+## [V.0.1.2] - 2026-09-26
+
+**可以打成"自带运行时"的便携包了**：一台没装过 Python 和 Node.js 的干净电脑，
+解压后双击 `run.cmd` 就能跑。
+
+### 新增
+
+- **便携包打包**（`make_portable_bundle.cmd` / `make_portable_bundle.py`）
+  - 把 **Python 解释器 + Node.js + 全部依赖**一起打包，目标电脑免安装任何东西
+  - Python 用官方 **embeddable** 包（10.5MB，只有解释器和标准库，不是完整安装版）；
+    Node 只提取 `node.exe` 和 npm 必需文件，丢掉文档和头文件 —— 这是"轻量"能做到的程度
+  - 打包结束后会用**包内解释器实跑自检**：导入全部依赖和项目模块，确认真的能跑
+  - 支持 `--zip` / `--no-mpv`（省约 120MB）/ `--no-node-modules` / `--out` / `--force`
+  - 体积约 320MB，压成 zip 约 135MB
+  - 包内会生成 `使用说明（便携版）.txt`
+  - 与原有的 `make_portable.py` 并存，两者区别：
+
+    | | `make_portable.py` | `make_portable_bundle.py` |
+    |---|---|---|
+    | 体积 | 约 70MB | 约 320MB |
+    | 自带 Python / Node | ❌ | ✅ |
+    | 目标电脑要做什么 | 装 Python+Node，跑 install.cmd | 解压，双击 run.cmd |
+
+- **启动脚本同时兼容便携包和开发环境**
+  - `_check_env.cmd` 负责在两套运行时里选一个，并导出 `PYTHON_EXE` 供各脚本使用
+  - 7 个启动脚本不再把 `.venv` 路径写死
+  - `run.py` / `check_env.py` / `bootstrap.py` / `start_netease_api.cmd` 优先使用内置 node
+  - `common.py` 新增 `RUNTIME_PYTHON` / `RUNTIME_NODE` / `bundled_runtime()`；
+    `venv_health()` 优先认内置运行时（便携包不需要那套"虚拟环境跨电脑"的检查）
+  - `run.py`、`bootstrap.py` 自己把项目根目录加进 `sys.path`
+    （embeddable 解释器的 `sys.path` 不含脚本所在目录）
+
+- **测试**：`tests/portable_bundle_test.py`（35 项），守住打包机制的约定。
+
+### 修复
+
+- **5 个 `.cmd` 被写成了 LF 换行**，已按项目约定改为 CRLF ——
+  `cmd.exe` 解析标签跳转时 LF 可能出错。
+
+### 说明（实现上的关键点）
+
+- embeddable 解释器一旦存在 `python*._pth` 文件，就进入 **isolated 模式并完全忽略
+  `PYTHONPATH`**。所以项目根目录必须在打包时以**相对路径**（`..\..`）写进 `._pth`，
+  否则便携包里的解释器 import 不到项目模块。这条约定有测试守着。
+- 便携包**不带** `config.json`（里面有直播间号和登录凭据），首次运行自动生成默认配置。
 
 ---
 
@@ -86,5 +134,6 @@
 - 仓库整理：`.gitignore` 排除 `node_modules` 与 `tools/`（均由脚本自动重建），
   清除历史上误提交的 121 MB 二进制，仓库从 168.7 MB 降至 162 KB
 
+[V.0.1.2]: https://github.com/virtual-kori/Bili-Danmu-Songs-For-Netease/releases/tag/v0.1.2
 [V.0.1.1]: https://github.com/virtual-kori/Bili-Danmu-Songs-For-Netease/releases/tag/v0.1.1
 [V.0.1.0]: https://github.com/virtual-kori/Bili-Danmu-Songs-For-Netease/releases/tag/v0.1.0

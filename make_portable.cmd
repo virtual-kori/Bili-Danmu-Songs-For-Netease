@@ -13,5 +13,5 @@ if errorlevel 1 (
     exit /b 1
 )
 
-".venv\Scripts\python.exe" make_portable.py %*
+"%PYTHON_EXE%" make_portable.py %*
 pause

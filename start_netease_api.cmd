@@ -20,6 +20,13 @@ echo 这个窗口不要关，关了机器人就搜不到歌了。
 echo 按 Ctrl+C 可以停止服务。
 echo.
 
+rem 便携包自带 node 时优先用它，目标电脑就不用装 Node.js
+if exist "%~dp0runtime\node\node.exe" (
+    set "NODE_EXE=%~dp0runtime\node\node.exe"
+) else (
+    set "NODE_EXE=node"
+)
+
 cd netease-api
-node serve.js
+"%NODE_EXE%" serve.js
 pause

@@ -22,10 +22,16 @@ from pathlib import Path
 # 别让 pygame 在自检时打印欢迎语
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
+# 便携包用的是 embeddable 解释器（isolated 模式），sys.path 不含脚本所在目录，
+# 所以得自己把项目根目录塞进去，否则 `import common` 会失败。
 ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 VENV = ROOT / ".venv"
 VENV_PYTHON = VENV / "Scripts" / "python.exe"
 PYVENV_CFG = VENV / "pyvenv.cfg"
+RUNTIME_NODE = ROOT / "runtime" / "node" / "node.exe"
 
 # 跑起来必须有的第三方包
 REQUIRED_MODULES = ("blivedm", "aiohttp", "brotli", "requests", "qrcode")
@@ -68,8 +74,16 @@ def read_pyvenv_home() -> str:
 
 
 def check_venv() -> None:
-    """确认我们真的在项目的虚拟环境里，而且这个环境属于这台机器。"""
-    from common import venv_health
+    """确认 Python 运行环境可用。
+
+    便携包（自带 runtime/python）和开发时的 .venv 都算通过；
+    重点是要拦住"从别的电脑拷来的 .venv"。
+    """
+    from common import RUNTIME_PYTHON, bundled_runtime, venv_health
+
+    if bundled_runtime():
+        say(OK, f"使用便携包内置运行时（{RUNTIME_PYTHON}）")
+        return
 
     if not VENV_PYTHON.is_file():
         problems.append("还没建虚拟环境")
@@ -116,20 +130,24 @@ def check_optional_packages() -> None:
 
 
 def check_node() -> None:
-    node = shutil.which("node")
-    if not node:
-        problems.append("没找到 Node.js")
-        say(FAIL, "没找到 node（网易云 API 服务需要它，装一下 Node.js 18+）")
-        return
+    # 便携包自带 node 时，目标机器不用装 Node.js
+    if RUNTIME_NODE.is_file():
+        say(OK, f"使用便携包内置 Node.js（{RUNTIME_NODE}）")
+    else:
+        node = shutil.which("node")
+        if not node:
+            problems.append("没找到 Node.js")
+            say(FAIL, "没找到 node（网易云 API 服务需要它，装一下 Node.js 18+）")
+            return
 
-    import subprocess
+        import subprocess
 
-    version = ""
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        version = subprocess.run(
-            [node, "--version"], capture_output=True, text=True, timeout=15
-        ).stdout.strip()
-    say(OK, f"Node.js {version or '(版本未知)'}")
+        version = ""
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            version = subprocess.run(
+                [node, "--version"], capture_output=True, text=True, timeout=15
+            ).stdout.strip()
+        say(OK, f"Node.js {version or '(版本未知)'}")
 
     modules = ROOT / "netease-api" / "node_modules"
     if modules.is_dir():

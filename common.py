@@ -15,9 +15,9 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 
 # 项目版本号。改这个值时请同步更新 CHANGELOG.md，并给仓库打上对应的 tag
-# （V.0.1.1 对应 tag v0.1.1）。
-VERSION = "V.0.1.1"
-VERSION_TAG = "v0.1.1"
+# （V.0.1.2 对应 tag v0.1.2）。
+VERSION = "V.0.1.2"
+VERSION_TAG = "v0.1.2"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "bilibili": {
@@ -155,17 +155,36 @@ def get_logger(name: str = "qdgj") -> logging.Logger:
 
 VENV_DIR = ROOT / ".venv"
 
+# 便携包里的内置运行时。存在时优先用它 —— 这样在没装 Python/Node 的电脑上也能直接跑。
+# 目录结构：runtime/python/python.exe、runtime/python/Lib/site-packages、runtime/node/node.exe
+RUNTIME_DIR = ROOT / "runtime"
+RUNTIME_PYTHON = RUNTIME_DIR / "python" / "python.exe"
+RUNTIME_SITE_PACKAGES = RUNTIME_DIR / "python" / "Lib" / "site-packages"
+RUNTIME_NODE = RUNTIME_DIR / "node" / "node.exe"
+
+
+def bundled_runtime() -> bool:
+    """这套东西是不是"自带运行时"的便携包（不用目标机器装 Python/Node）。"""
+    return RUNTIME_PYTHON.is_file()
+
 
 def venv_health() -> tuple[bool, str]:
-    """检查项目的 .venv 在这台机器上到底能不能用。
+    """检查 Python 运行环境在这台机器上到底能不能用。
 
-    虚拟环境是【不可移植】的：`.venv/pyvenv.cfg` 里记着创建它时那台机器上
-    Python 的绝对路径。把整个文件夹拷到另一台电脑后，那个路径不存在，
-    venv 就废了 —— 而且报错往往很难懂。这里提前把它识别出来，
-    好让启动脚本给出"重跑 install.cmd"这种能照着做的提示。
+    分两种情况：
+
+    1. **便携包自带运行时**（`runtime/python/python.exe`）：解释器和依赖都在包内，
+       路径是相对的，拷到哪台电脑都能用，直接算通过。
+    2. **开发时的 .venv**：虚拟环境是【不可移植】的 —— `.venv/pyvenv.cfg` 里记着
+       创建它时那台机器上 Python 的绝对路径。把整个文件夹拷到另一台电脑后，那个
+       路径不存在，venv 就废了，报错还很难懂。这里提前识别出来，
+       好让启动脚本给出"重跑 install.cmd"这种能照着做的提示。
 
     返回 (是否可用, 说明)。可用的说明是空串。
     """
+    if bundled_runtime():
+        return True, ""
+
     python_exe = VENV_DIR / "Scripts" / "python.exe"
     if not python_exe.is_file():
         return False, "还没建虚拟环境"

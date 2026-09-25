@@ -10,5 +10,5 @@ if errorlevel 1 (
 
 echo 正在下载 mpv 便携版到 tools\mpv\（约 32MB，不需要管理员权限）
 echo.
-".venv\Scripts\python.exe" get_mpv.py %*
+"%PYTHON_EXE%" get_mpv.py %*
 pause

@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-from common import ROOT, load_config, setup_logging, venv_health
+from common import ROOT, RUNTIME_NODE, bundled_runtime, load_config, setup_logging, venv_health
 
 OK = "[ OK ]"
 FAIL = "[FAIL]"
@@ -35,15 +35,24 @@ def main() -> int:
     # ---------------------------------------------------------- 1. Python 与依赖
     print("\n[1/6] Python 与依赖包")
     print(f"      Python {sys.version.split()[0]}  ({sys.executable})")
-    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
-    _check("运行在项目虚拟环境中", in_venv, "" if in_venv else "建议用 run.cmd 启动", warn_only=True)
+    if bundled_runtime():
+        # 便携包用 embeddable 解释器，本来就不是 venv，别误导用户
+        _check("运行在便携包内置运行时中", True, "")
+    else:
+        in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+        _check("运行在项目虚拟环境中", in_venv, "" if in_venv else "建议用 run.cmd 启动", warn_only=True)
 
-    # 虚拟环境不能跨电脑，这块单独查一下，报错才好懂
+    # 运行时不能跨电脑（venv 会记原机器的 Python 路径），这块单独查一下，报错才好懂
     venv_ok, venv_reason = venv_health()
-    if not _check("虚拟环境在本机可用（没有跨电脑拷贝的问题）", venv_ok, venv_reason):
+    runtime_label = (
+        "运行时在本机可用（便携包内置）" if bundled_runtime()
+        else "虚拟环境在本机可用（没有跨电脑拷贝的问题）"
+    )
+    if not _check(runtime_label, venv_ok, venv_reason):
         problems += 1
 
-    node = shutil.which("node")
+    # 便携包自带 node 时优先认它，这样自检结果和实际运行时是一致的
+    node = str(RUNTIME_NODE) if RUNTIME_NODE.is_file() else shutil.which("node")
     if node:
         try:
             node_version = subprocess.run(
@@ -51,7 +60,8 @@ def main() -> int:
             ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             node_version = ""
-        _check("Node.js 可用", True, node_version or node)
+        label = "Node.js 可用（便携包内置）" if RUNTIME_NODE.is_file() else "Node.js 可用"
+        _check(label, True, node_version or node)
     else:
         _check("Node.js 可用", False, "没找到 node，网易云 API 服务需要 Node.js 18+")
         problems += 1

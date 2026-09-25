@@ -1,6 +1,6 @@
 # B站弹幕点歌机器人（网易云音乐）
 
-**当前版本：V.0.1.1** · [更新日志 CHANGELOG.md](CHANGELOG.md)
+**当前版本：V.0.1.2** · [更新日志 CHANGELOG.md](CHANGELOG.md)
 
 观众在直播间发 **`点歌 歌名`**，机器人自动在网易云搜索、排队、用本机播放器放出来。
 不需要任何开发者凭证，用你自己的网易云账号扫码登录即可（VIP 账号能放会员歌曲）。
@@ -274,6 +274,52 @@ make_portable.cmd
 （`_check_env.cmd` → `bootstrap.py`），检测到虚拟环境是别的电脑上建的，
 会直接告诉你"请重新运行 install.cmd"，而不是丢一堆报错。
 
+### 全新电脑免安装：自带运行时的便携包
+
+上面那种方式要求目标电脑**先装好 Python 和 Node.js**。如果对方是台干净电脑、
+不想装任何东西，用这个：
+
+```bat
+make_portable_bundle.cmd --zip
+```
+
+它会打出 `B站弹幕点歌机器人便携版`（约 320MB，压成 zip 约 135MB），
+**Python 解释器、Node.js 和全部依赖都打包在内**。目标电脑上：
+
+1. 解压（整个文件夹，放哪都行）
+2. 双击 **`run.cmd`**
+
+就这两步 —— **不用装 Python，不用装 Node.js，不用跑 install.cmd**。
+
+两种打包方式的区别：
+
+| | `make_portable.cmd` | `make_portable_bundle.cmd` |
+|---|---|---|
+| 体积 | 约 70MB | 约 320MB（zip 135MB） |
+| 自带 Python / Node | ❌ | ✅ |
+| 目标电脑要做什么 | 装 Python+Node，跑 install.cmd | **解压，双击 run.cmd** |
+| 适合 | 自己的另一台机器 | 给别人、或干净电脑 |
+
+关于"轻量"：Python 用的是官方 **embeddable** 包（10.5MB，只有解释器和标准库，
+不是完整安装版），Node 只提取 `node.exe` 和 npm 必需文件、丢掉文档和头文件。
+这两项是运行时的硬需求，没法再压。
+
+常用参数：
+
+```bat
+make_portable_bundle.cmd --zip             顺便压成 zip
+make_portable_bundle.cmd --no-mpv          不带 mpv（省约 120MB，会自动退回 pygame 后端）
+make_portable_bundle.cmd --no-node-modules  不带 node_modules（目标机器需能联网）
+make_portable_bundle.cmd --out D:\x --force 指定输出位置、覆盖已存在的
+```
+
+打出来的包里有个 `使用说明（便携版）.txt`，写明了目标电脑上该做什么。
+
+> 💡 **实现上最关键的一点**：embeddable 解释器一旦存在 `python*._pth` 文件，
+> 就会进入 isolated 模式并**完全忽略 `PYTHONPATH`**，所以项目根目录必须在打包时
+> 以相对路径（`..\..`）写进 `._pth`。少这一行，便携包里的解释器就 import 不到项目模块。
+> 这条约定由 `tests/portable_bundle_test.py` 守着。
+
 ### 想分开跑也行
 
 需要单独开窗口跑 API（比如机器人要反复重启）时，用这两个：
@@ -506,7 +552,8 @@ start_bot.cmd --list-backends
 | **`run.cmd`** / `run.bat` / `run.py` | **一键运行**：自动拉起 API 服务 + 机器人，退出时一起收掉 |
 | `install.cmd` | 一键装依赖（会自动识别并重建无效的虚拟环境） |
 | `bootstrap.py` / `_check_env.cmd` | 启动前环境自检（换电脑后能不能跑，看它） |
-| `make_portable.cmd` / `make_portable.py` | 打包成可迁移副本（不带 .venv，可加 `--zip`） |
+| `make_portable.cmd` / `make_portable.py` | 打包成可迁移副本（**目标机器要装 Python/Node**，可加 `--zip`） |
+| `make_portable_bundle.cmd` / `make_portable_bundle.py` | 打包成**自带运行时**的便携版（目标电脑免装 Python/Node，解压即用） |
 | `login_netease.cmd` / `qr_login.py` | 扫码登录网易云，保存 Cookie |
 | `start_netease_api.cmd` | 只启动本地网易云 API 服务（**必须常开**） |
 | `start_bot.cmd` / `danmaku_bot.py` | 只启动机器人：收弹幕、点歌、播放 |
@@ -536,6 +583,7 @@ start_bot.cmd --list-backends
 | `tests/diagnose_danmaku.py` | 弹幕捕捉排查（收不到弹幕时跑这个） |
 | `tests/orphan_test.py` | 强杀实验：验证播放器子进程不会变成孤儿 |
 | `tests/portable_test.py` | 可移植性检查（绝对路径 / 虚拟环境 / 批处理换行） |
+| `tests/portable_bundle_test.py` | 便携包打包机制检查（运行时路径约定 / 启动脚本 / ._pth 相对路径） |
 | `tests/probe_free.py` | 探测未登录时哪些歌能播 |
 | `ruff.toml` | 代码静态检查配置（开发用） |
 | `tools/` | mpv 便携版和解压工具，可随时删掉 |

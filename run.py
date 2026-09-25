@@ -25,9 +25,18 @@ import time
 from collections import deque
 from pathlib import Path
 
+# 便携包里的内置解释器是 embeddable 版，sys.path 不含脚本所在目录，
+# 所以先把项目根目录塞进去，保证 `import common` 一定成功。
+ROOT_EARLY = Path(__file__).resolve().parent
+if str(ROOT_EARLY) not in sys.path:
+    sys.path.insert(0, str(ROOT_EARLY))
+
 from common import ROOT, ensure_console_utf8, load_config, setup_logging
 
 VENV_PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+# 便携包自带的运行时（存在时优先）
+BUNDLED_PYTHON = ROOT / "runtime" / "python" / "python.exe"
+BUNDLED_NODE = ROOT / "runtime" / "node" / "node.exe"
 API_DIR = ROOT / "netease-api"
 SERVE_JS = API_DIR / "serve.js"
 
@@ -36,13 +45,26 @@ STARTUP_TIMEOUT = 90.0
 
 
 def _ensure_venv() -> None:
-    """如果被系统 Python 启动了，就换成项目虚拟环境重新执行。"""
+    """如果被系统 Python 或内置解释器启动了，就换成项目虚拟环境重新执行。
+
+    便携包（有 runtime/）时不做这个替换：内置解释器本来就是对的，
+    而且 .venv 在别的电脑上不一定可用。
+    """
+    if BUNDLED_PYTHON.is_file():
+        return
     if not VENV_PYTHON.is_file():
         return
     with contextlib.suppress(OSError, ValueError):
         if Path(sys.executable).resolve() == VENV_PYTHON.resolve():
             return
         os.execv(str(VENV_PYTHON), [str(VENV_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]])
+
+
+def find_node() -> str | None:
+    """找 Node：便携包自带的优先，其次才是系统 PATH 里的。"""
+    if BUNDLED_NODE.is_file():
+        return str(BUNDLED_NODE)
+    return shutil.which("node")
 
 
 def api_healthy(base_url: str, timeout: float = 2.0) -> bool:
@@ -77,7 +99,7 @@ class ApiServer:
         self._watch_thread: threading.Thread | None = None
 
     def start(self, port: int) -> None:
-        node = shutil.which("node")
+        node = find_node()
         if not node:
             raise RuntimeError("没找到 node，请先安装 Node.js（https://nodejs.org/）")
 
@@ -225,9 +247,9 @@ def main() -> int:
 
     _ensure_venv()
 
-    if not VENV_PYTHON.is_file():
+    if not (BUNDLED_PYTHON.is_file() or VENV_PYTHON.is_file()):
         log.error("还没装依赖：找不到 %s", VENV_PYTHON)
-        log.error("请先双击 install.cmd")
+        log.error("请先双击 install.cmd（便携包的话，说明 runtime 目录不完整）")
         return 1
     if not SERVE_JS.is_file():
         log.error("找不到 API 服务启动器：%s", SERVE_JS)

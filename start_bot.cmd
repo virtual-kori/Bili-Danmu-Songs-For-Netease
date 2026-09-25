@@ -18,5 +18,5 @@ echo       播放控制（切歌/暂停/音量）可以看浏览器面板，或�
 echo       按 Ctrl+C 可以停止。
 echo.
 
-".venv\Scripts\python.exe" danmaku_bot.py %*
+"%PYTHON_EXE%" danmaku_bot.py %*
 pause
