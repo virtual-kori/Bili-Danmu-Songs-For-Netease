@@ -27,3 +27,7 @@ config.json
 *.cookie
 .env
 .env.*
+
+# 临时推送脚本（仅本机使用）
+.tmp_askpass.*
+

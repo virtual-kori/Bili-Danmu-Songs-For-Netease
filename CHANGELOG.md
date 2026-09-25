@@ -73,7 +73,7 @@
 
 ## [V.0.1.0] - 2026-09-25
 
-首个带版本号的版本，对应仓库的初始提交。基础功能：
+基础功能（本版本之前仓库没有版本号，这里补记为 0.1.0，未单独打 tag）：
 
 - 观众在直播间发 `点歌 歌名`，机器人自动搜索、排队、用本机播放器播放
 - 网易云扫码登录，VIP 账号可播放会员歌曲
@@ -86,5 +86,5 @@
 - 仓库整理：`.gitignore` 排除 `node_modules` 与 `tools/`（均由脚本自动重建），
   清除历史上误提交的 121 MB 二进制，仓库从 168.7 MB 降至 162 KB
 
-[V.0.1.1]: https://github.com/virtual-kori/B-/releases/tag/v0.1.1
-[V.0.1.0]: https://github.com/virtual-kori/B-/releases/tag/v0.1.0
+[V.0.1.1]: https://github.com/virtual-kori/Bili-Danmu-Songs-For-Netease/releases/tag/v0.1.1
+[V.0.1.0]: https://github.com/virtual-kori/Bili-Danmu-Songs-For-Netease/releases/tag/v0.1.0
