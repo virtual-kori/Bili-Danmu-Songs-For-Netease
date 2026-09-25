@@ -1,0 +1,29 @@
+# ── 依赖与工具（本机产物，克隆后用脚本自动补齐）──────────────────
+# netease-api 的 JS 依赖：运行 install.cmd 会自动 npm install
+netease-api/node_modules/
+node_modules/
+
+# mpv 便携版 + 7zr/7z.sfx：运行 get_mpv.py / make_portable.cmd 会自动下载
+tools/
+
+# ── Python ────────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ── 缓存与临时文件 ────────────────────────────────────────────
+.ruff_cache/
+.tmp/
+.dev/
+cache/
+*.log
+
+# ── 本地配置与密钥（含 cookie / 登录凭据，切勿提交）──────────────
+config.json
+*.session
+*.cookie
+.env
+.env.*

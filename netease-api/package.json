@@ -1,0 +1,12 @@
+{
+  "name": "qdgj-netease-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local NetEase Cloud Music API server for danmaku song requests",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@neteasecloudmusicapienhanced/api": "^4.40.1"
+  }
+}
